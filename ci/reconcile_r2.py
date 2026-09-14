@@ -45,12 +45,15 @@ def patch(root: Path):
     v27=root/'app/src/main/res/values-v27'; v27.mkdir(parents=True,exist_ok=True)
     (v27/'styles.xml').write_text('<resources>\n    <style name="AppTheme">\n        <item name="android:windowLightNavigationBar">true</item>\n    </style>\n</resources>\n',encoding='utf-8',newline='\n')
 
+    report=root/'provenance/R2_ANDROID_SHELL_RECONCILIATION.md'
+    report.write_text('''# INVERTEBRATA v1.8.7 — R2 Android shell reconciliation\n\nDerived deterministically from the frozen reconciled source whose ZIP SHA-256 is `281e5f80a14f80df6ad87427a8e29859050f35430ec3158ad52b84ae607df1a3`.\n\nCorrections are limited to Android-shell compatibility defects exposed by genuine Android 16 / API 36 lint:\n\n- Migrated Back handling from `Activity.onBackPressed()` / platform callback wiring to AndroidX `OnBackPressedDispatcher` through `ComponentActivity`.\n- Added `androidx.activity:activity:1.11.0`, a stable Activity release compiled with API 36.\n- Moved `android:windowLightNavigationBar` from the base values theme to `values-v27`, matching its API requirement.\n- Guarded the API 26 `SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR` flag at runtime.\n\nThe academic payload is intentionally unchanged. Both `academic_payload/index.html` and `app/src/main/assets/www/index.html` remain SHA-256 `25220886837b724f781612f66ae5f8fd4a983ca644559c4871aff91b479e24b7`. The launcher master remains SHA-256 `dbd00a8d0e8ce09574c9c730b5fb4fa0049b3470171204c6db4712184bb54f7e`.\n''',encoding='utf-8',newline='\n')
+
     mf=root/'provenance/SOURCE_MANIFEST_SHA256.txt'
     tracked=[]
     for line in mf.read_text(encoding='utf-8').splitlines():
         if line.strip(): tracked.append(line.split('  ',1)[1])
-    new_rel='app/src/main/res/values-v27/styles.xml'
-    if new_rel not in tracked: tracked.append(new_rel)
+    for new_rel in ['app/src/main/res/values-v27/styles.xml','provenance/R2_ANDROID_SHELL_RECONCILIATION.md']:
+        if new_rel not in tracked: tracked.append(new_rel)
     lines=[]
     for rel in sorted(tracked):
         fp=root/rel; require(fp.is_file(),f'missing tracked file after patch: {rel}')
