@@ -96,7 +96,21 @@ jobs:
           set -euo pipefail
           ./gradlew --no-daemon clean lint test assembleDebug assembleRelease bundleRelease --stacktrace
 
+      - name: Capture lint evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence/lint"
+          root="${{ steps.extract.outputs.root }}"
+          if [ -d "$root/app/build" ]; then
+            find "$root/app/build" -type f \( -name 'lint-results*.txt' -o -name 'lint-results*.html' -o -name 'lint-results*.xml' -o -name 'lint-results*.sarif' \) -print -exec cp {} "$RUNNER_TEMP/evidence/lint/" \; || true
+          fi
+          if [ -d "$root/build/reports/problems" ]; then
+            cp -R "$root/build/reports/problems" "$RUNNER_TEMP/evidence/" || true
+          fi
+
       - name: Record artifact hashes
+        if: success()
         shell: bash
         working-directory: ${{ steps.extract.outputs.root }}
         run: |
@@ -106,6 +120,7 @@ jobs:
           sha256sum academic_payload/index.html app/src/main/assets/www/index.html launcher_assets/master/invertebrata_icon_master.png | tee "$RUNNER_TEMP/evidence/source-sha256.txt"
 
       - name: Upload build outputs
+        if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: INVERTEBRATA-v1.8.7-build-outputs
