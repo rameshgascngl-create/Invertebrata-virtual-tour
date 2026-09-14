@@ -10,12 +10,14 @@ jobs:
   sign-and-qa:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+
     env:
       CANONICAL_ZIP: INVERTEBRATA_v1.8.7_RECONCILED_ANDROID_SOURCE.zip
       CANONICAL_ZIP_SHA256: 281e5f80a14f80df6ad87427a8e29859050f35430ec3158ad52b84ae607df1a3
       R2_ZIP_SHA256: 3f3ffd5d0b03da74b9f7b85cfc755883594aea3141149b1131ee11963d9a184a
       CANONICAL_PAYLOAD_SHA256: 25220886837b724f781612f66ae5f8fd4a983ca644559c4871aff91b479e24b7
       CANONICAL_LAUNCHER_SHA256: dbd00a8d0e8ce09574c9c730b5fb4fa0049b3470171204c6db4712184bb54f7e
+
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -27,19 +29,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           test -f "$CANONICAL_ZIP"
-          test "$(sha256sum "$CANONICAL_ZIP" | awk '{print $1}')" = "$CANONICAL_ZIP_SHA256"
+
+          actual_zip_sha="$(sha256sum "$CANONICAL_ZIP" | awk '{print $1}')"
+          echo "Frozen ZIP SHA-256: $actual_zip_sha"
+          test "$actual_zip_sha" = "$CANONICAL_ZIP_SHA256"
+
           mkdir -p "$RUNNER_TEMP/src"
           unzip -q "$CANONICAL_ZIP" -d "$RUNNER_TEMP/src"
+
           settings="$(find "$RUNNER_TEMP/src" -type f -name settings.gradle -print -quit)"
           test -n "$settings"
+
           root="$(dirname "$settings")"
+
           out="$RUNNER_TEMP/INVERTEBRATA_v1.8.7_RECONCILED_ANDROID_SOURCE_R2.zip"
+
           python "$GITHUB_WORKSPACE/ci/reconcile_r2.py" "$root" "$out"
-          test "$(sha256sum "$out" | awk '{print $1}')" = "$R2_ZIP_SHA256"
+
+          actual_r2_sha="$(sha256sum "$out" | awk '{print $1}')"
+          echo "R2 ZIP SHA-256: $actual_r2_sha"
+          test "$actual_r2_sha" = "$R2_ZIP_SHA256"
+
           test "$(sha256sum "$root/academic_payload/index.html" | awk '{print $1}')" = "$CANONICAL_PAYLOAD_SHA256"
+
           test "$(sha256sum "$root/app/src/main/assets/www/index.html" | awk '{print $1}')" = "$CANONICAL_PAYLOAD_SHA256"
+
           test "$(sha256sum "$root/launcher_assets/master/invertebrata_icon_master.png" | awk '{print $1}')" = "$CANONICAL_LAUNCHER_SHA256"
+
           echo "root=$root" >> "$GITHUB_OUTPUT"
 
       - name: Set up Java
@@ -57,8 +75,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "emulator" "system-images;android-36;google_apis;x86_64"
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "emulator" \
+            "system-images;android-36;google_apis;x86_64"
+
+          test -d "$ANDROID_HOME/platforms/android-36"
+          test -d "$ANDROID_HOME/build-tools/36.0.0"
 
       - name: Set up Gradle 8.14.3
         uses: gradle/actions/setup-gradle@017a9effdb900e5b5b2fddfb590a105619dca3c3
@@ -71,64 +99,181 @@ jobs:
         working-directory: ${{ steps.source.outputs.root }}
         run: |
           set -euo pipefail
-          gradle wrapper --gradle-version 8.14.3 --distribution-type bin
+
+          gradle wrapper \
+            --gradle-version 8.14.3 \
+            --distribution-type bin
+
           chmod +x gradlew
-          ./gradlew --no-daemon clean lint test assembleRelease bundleRelease --stacktrace
+
+          ./gradlew \
+            --no-daemon \
+            clean \
+            lint \
+            test \
+            assembleRelease \
+            bundleRelease \
+            --stacktrace
 
       - name: Require release signing secrets
         shell: bash
         env:
-          KS_B64: ${{ secrets.INVERTEBRATA_KEYSTORE_B64 }}
-          KS_PASS: ${{ secrets.INVERTEBRATA_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.INVERTEBRATA_KEY_ALIAS }}
-          KEY_PASS: ${{ secrets.INVERTEBRATA_KEY_PASSWORD }}
+          KS_B64: ${{ secrets.KS_B64 }}
+          KS_PASS: ${{ secrets.KS_PASS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.KEY_PASS }}
         run: |
           set -euo pipefail
+
           test -n "$KS_B64"
           test -n "$KS_PASS"
           test -n "$KEY_ALIAS"
           test -n "$KEY_PASS"
 
-      - name: Sign and verify Release APK/AAB
+      - name: Sign and verify Release APK and AAB
         id: sign
         shell: bash
         working-directory: ${{ steps.source.outputs.root }}
         env:
-          KS_B64: ${{ secrets.INVERTEBRATA_KEYSTORE_B64 }}
-          KS_PASS: ${{ secrets.INVERTEBRATA_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.INVERTEBRATA_KEY_ALIAS }}
-          KEY_PASS: ${{ secrets.INVERTEBRATA_KEY_PASSWORD }}
+          KS_B64: ${{ secrets.KS_B64 }}
+          KS_PASS: ${{ secrets.KS_PASS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.KEY_PASS }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/release" "$RUNNER_TEMP/evidence"
-          printf '%s' "$KS_B64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+
+          mkdir -p \
+            "$RUNNER_TEMP/release" \
+            "$RUNNER_TEMP/evidence"
+
+          printf '%s' "$KS_B64" \
+            | base64 --decode \
+            > "$RUNNER_TEMP/release.keystore"
+
           chmod 600 "$RUNNER_TEMP/release.keystore"
-          unsigned_apk="$(find app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
-          unsigned_aab="$(find app/build/outputs/bundle/release -type f -name '*.aab' -print -quit)"
-          test -n "$unsigned_apk" && test -n "$unsigned_aab"
-          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -f -p 4 "$unsigned_apk" "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-aligned.apk"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign --ks "$RUNNER_TEMP/release.keystore" --ks-pass env:KS_PASS --ks-key-alias "$KEY_ALIAS" --key-pass env:KEY_PASS --out "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.apk" "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-aligned.apk"
-          cp "$unsigned_aab" "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.aab"
-          jarsigner -keystore "$RUNNER_TEMP/release.keystore" -storepass "$KS_PASS" -keypass "$KEY_PASS" -sigalg SHA256withRSA -digestalg SHA-256 "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.aab" "$KEY_ALIAS"
-          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -v 4 "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.apk"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.apk" | tee "$RUNNER_TEMP/evidence/apk-signature.txt"
-          jarsigner -verify -verbose -certs "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.aab" > "$RUNNER_TEMP/evidence/aab-signature.txt"
-          sha256sum "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.apk" "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.aab" | tee "$RUNNER_TEMP/evidence/signed-artifact-sha256.txt"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.apk" > "$RUNNER_TEMP/evidence/apk-badging.txt"
-          grep -q "package: name='com.gasczoology.invertebratelab' versionCode='18700' versionName='1.8.7'" "$RUNNER_TEMP/evidence/apk-badging.txt"
-          echo "apk=$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.apk" >> "$GITHUB_OUTPUT"
+
+          unsigned_apk="$(
+            find app/build/outputs/apk/release \
+              -type f \
+              -name '*.apk' \
+              -print \
+              -quit
+          )"
+
+          unsigned_aab="$(
+            find app/build/outputs/bundle/release \
+              -type f \
+              -name '*.aab' \
+              -print \
+              -quit
+          )"
+
+          test -n "$unsigned_apk"
+          test -n "$unsigned_aab"
+
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" \
+            -f \
+            -p \
+            4 \
+            "$unsigned_apk" \
+            "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-aligned.apk"
+
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign \
+            --ks "$RUNNER_TEMP/release.keystore" \
+            --ks-pass env:KS_PASS \
+            --ks-key-alias "$KEY_ALIAS" \
+            --key-pass env:KEY_PASS \
+            --out "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.apk" \
+            "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-aligned.apk"
+
+          cp \
+            "$unsigned_aab" \
+            "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.aab"
+
+          jarsigner \
+            -keystore "$RUNNER_TEMP/release.keystore" \
+            -storepass "$KS_PASS" \
+            -keypass "$KEY_PASS" \
+            -sigalg SHA256withRSA \
+            -digestalg SHA-256 \
+            "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.aab" \
+            "$KEY_ALIAS"
+
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" \
+            -c \
+            -v \
+            4 \
+            "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.apk" \
+            | tee "$RUNNER_TEMP/evidence/zipalign.txt"
+
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify \
+            --verbose \
+            --print-certs \
+            "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.apk" \
+            | tee "$RUNNER_TEMP/evidence/apk-signature.txt"
+
+          jarsigner \
+            -verify \
+            -verbose \
+            -certs \
+            "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.aab" \
+            > "$RUNNER_TEMP/evidence/aab-signature.txt"
+
+          sha256sum \
+            "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.apk" \
+            "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.aab" \
+            | tee "$RUNNER_TEMP/evidence/signed-artifact-sha256.txt"
+
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" \
+            dump badging \
+            "$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.apk" \
+            > "$RUNNER_TEMP/evidence/apk-badging.txt"
+
+          grep -q \
+            "package: name='com.gasczoology.invertebratelab' versionCode='18700' versionName='1.8.7'" \
+            "$RUNNER_TEMP/evidence/apk-badging.txt"
+
+          keytool \
+            -list \
+            -v \
+            -keystore "$RUNNER_TEMP/release.keystore" \
+            -storepass "$KS_PASS" \
+            -alias "$KEY_ALIAS" \
+            > "$RUNNER_TEMP/evidence/keystore-certificate.txt"
+
+          echo "apk=$RUNNER_TEMP/release/INVERTEBRATA-v1.8.7-R2-release-signed.apk" \
+            >> "$GITHUB_OUTPUT"
 
       - name: Create Android 16 emulator
         shell: bash
         run: |
           set -euo pipefail
-          echo no | avdmanager create avd -n invertebrata_api36 -k "system-images;android-36;google_apis;x86_64" --force
-          nohup "$ANDROID_HOME/emulator/emulator" -avd invertebrata_api36 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -wipe-data > "$RUNNER_TEMP/emulator.log" 2>&1 &
+
+          echo no | avdmanager create avd \
+            -n invertebrata_api36 \
+            -k "system-images;android-36;google_apis;x86_64" \
+            --force
+
+          nohup "$ANDROID_HOME/emulator/emulator" \
+            -avd invertebrata_api36 \
+            -no-window \
+            -no-audio \
+            -no-boot-anim \
+            -gpu swiftshader_indirect \
+            -no-snapshot \
+            -wipe-data \
+            > "$RUNNER_TEMP/emulator.log" \
+            2>&1 &
+
           adb wait-for-device
+
           for i in $(seq 1 180); do
-            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then break; fi
+            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+              break
+            fi
             sleep 2
           done
+
           test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1"
 
       - name: Install signed Release APK and run smoke QA
@@ -137,26 +282,77 @@ jobs:
           APK: ${{ steps.sign.outputs.apk }}
         run: |
           set -euo pipefail
+
           mkdir -p "$RUNNER_TEMP/evidence"
-          adb install "$APK" | tee "$RUNNER_TEMP/evidence/clean-install.txt"
-          adb shell am force-stop com.gasczoology.invertebratelab
-          adb shell monkey -p com.gasczoology.invertebratelab -c android.intent.category.LAUNCHER 1
+
+          adb install "$APK" \
+            | tee "$RUNNER_TEMP/evidence/clean-install.txt"
+
+          adb shell am force-stop \
+            com.gasczoology.invertebratelab
+
+          adb shell monkey \
+            -p com.gasczoology.invertebratelab \
+            -c android.intent.category.LAUNCHER \
+            1
+
           sleep 8
-          adb shell dumpsys window windows | grep -q 'com.gasczoology.invertebratelab'
+
+          adb shell dumpsys window windows \
+            > "$RUNNER_TEMP/evidence/window-after-launch.txt"
+
+          grep -q \
+            'com.gasczoology.invertebratelab' \
+            "$RUNNER_TEMP/evidence/window-after-launch.txt"
+
           adb shell input keyevent KEYCODE_BACK
+
           sleep 2
-          adb shell monkey -p com.gasczoology.invertebratelab -c android.intent.category.LAUNCHER 1
+
+          adb shell monkey \
+            -p com.gasczoology.invertebratelab \
+            -c android.intent.category.LAUNCHER \
+            1
+
           sleep 3
-          adb install -r "$APK" | tee "$RUNNER_TEMP/evidence/upgrade-install.txt"
+
+          adb install -r "$APK" \
+            | tee "$RUNNER_TEMP/evidence/upgrade-install.txt"
+
           adb shell cmd connectivity airplane-mode enable || true
-          adb shell am force-stop com.gasczoology.invertebratelab
-          adb shell monkey -p com.gasczoology.invertebratelab -c android.intent.category.LAUNCHER 1
+
+          adb shell am force-stop \
+            com.gasczoology.invertebratelab
+
+          adb shell monkey \
+            -p com.gasczoology.invertebratelab \
+            -c android.intent.category.LAUNCHER \
+            1
+
           sleep 8
-          adb shell dumpsys window windows | grep -q 'com.gasczoology.invertebratelab'
+
+          adb shell dumpsys window windows \
+            > "$RUNNER_TEMP/evidence/window-airplane-mode.txt"
+
+          grep -q \
+            'com.gasczoology.invertebratelab' \
+            "$RUNNER_TEMP/evidence/window-airplane-mode.txt"
+
           adb shell cmd connectivity airplane-mode disable || true
-          adb logcat -d -t 1200 > "$RUNNER_TEMP/evidence/logcat.txt"
-          if grep -E 'FATAL EXCEPTION|AndroidRuntime.*com\.gasczoology\.invertebratelab' "$RUNNER_TEMP/evidence/logcat.txt"; then exit 1; fi
-          adb shell dumpsys package com.gasczoology.invertebratelab > "$RUNNER_TEMP/evidence/package-dumpsys.txt"
+
+          adb logcat -d -t 1200 \
+            > "$RUNNER_TEMP/evidence/logcat.txt"
+
+          if grep -E \
+            'FATAL EXCEPTION|AndroidRuntime.*com\.gasczoology\.invertebratelab' \
+            "$RUNNER_TEMP/evidence/logcat.txt"
+          then
+            exit 1
+          fi
+
+          adb shell dumpsys package \
+            com.gasczoology.invertebratelab \
+            > "$RUNNER_TEMP/evidence/package-dumpsys.txt"
 
       - name: Upload signed release
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
